@@ -8,21 +8,28 @@ from pathlib import Path
 app = Flask(__name__)
 CORS(app)
 
-@app.route('/', methods=['GET'])
+def create_app():
+    return app
+
+@app.route('/api', methods=['GET'])
 def home():
     return {'status': 'ok'}
 
 @app.route('/api/download', methods=['POST'])
 def download():
     try:
-        data = request.json
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data received'}), 400
+            
         url = data.get('url')
         format_type = data.get('format', 'mp4')
 
         if not url:
             return jsonify({'error': 'URL não fornecida'}), 400
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir = tempfile.mkdtemp()
+        try:
             ydl_opts = {
                 'format': 'bestaudio/best' if format_type == 'mp3' else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                 'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
@@ -55,8 +62,18 @@ def download():
                 else:
                     return jsonify({'error': 'Arquivo não encontrado'}), 404
 
+        finally:
+            # Limpar arquivos temporários
+            try:
+                for file in os.listdir(temp_dir):
+                    os.remove(os.path.join(temp_dir, file))
+                os.rmdir(temp_dir)
+            except:
+                pass
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-if __name__ == '__main__':
-    app.run()
+# Handler for Vercel serverless function
+def handler(request):
+    return app(request)
