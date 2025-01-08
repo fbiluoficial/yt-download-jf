@@ -115,98 +115,64 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/0.24.0/axios.min.js"></script>
     <script>
-        const API_KEY = 'AIzaSyDQeXnM8_chsgP13COqHkM7vRXsdI5LbEc';
-        const API_URL = 'https://youtube-dl-api.herokuapp.com';
-
-        async function getVideoId(url) {
-            const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
-            const match = url.match(regex);
-            return match ? match[1] : null;
-        }
-
-        async function getVideoInfo(videoId) {
-            try {
-                const response = await axios.get(`https://www.googleapis.com/youtube/v3/videos?id=${videoId}&key=${API_KEY}&part=snippet`);
-                return response.data.items[0].snippet;
-            } catch (error) {
-                console.error('Erro ao obter informações do vídeo:', error);
-                return null;
-            }
-        }
-
-        async function processVideos() {
-            const urlsText = document.getElementById('urls').value;
+        async function downloadVideo() {
+            const url = document.getElementById('url').value;
             const format = document.querySelector('input[name="format"]:checked').value;
-            const videoInfo = document.getElementById('video-info');
-            videoInfo.innerHTML = '';
+            const statusDiv = document.getElementById('download-status');
+            
+            if (!url) {
+                alert('Por favor, insira um link do YouTube');
+                return;
+            }
 
-            const urls = urlsText.split('\n').filter(url => url.trim());
+            // Criar elemento de status
+            statusDiv.innerHTML = `
+                <div class="video-item">
+                    <h5>Baixando vídeo...</h5>
+                    <div class="progress mb-3" style="height: 20px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                             role="progressbar" style="width: 0%;" 
+                             id="progress-bar">0%</div>
+                    </div>
+                    <div id="download-info" class="text-muted"></div>
+                </div>
+            `;
 
-            for (const url of urls) {
-                const videoId = await getVideoId(url.trim());
-                if (!videoId) continue;
+            try {
+                const response = await fetch('/api/download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ url, format })
+                });
 
-                const info = await getVideoInfo(videoId);
-                if (!info) continue;
-
-                const videoDiv = document.createElement('div');
-                videoDiv.className = 'video-item';
-                videoDiv.innerHTML = `
-                    <div class="row">
-                        <div class="col-md-4">
-                            <img src="${info.thumbnails.medium.url}" alt="${info.title}" class="video-thumbnail img-fluid">
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const downloadUrl = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = downloadUrl;
+                    a.download = `video.${format}`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(downloadUrl);
+                    
+                    statusDiv.innerHTML = `
+                        <div class="alert alert-success">
+                            Download concluído com sucesso!
                         </div>
-                        <div class="col-md-8">
-                            <h5>${info.title}</h5>
-                            <p class="text-muted">${info.channelTitle}</p>
-                            <div class="progress mb-3" style="height: 20px;">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated" 
-                                     role="progressbar" style="width: 0%;" 
-                                     id="progress-${videoId}">0%</div>
-                            </div>
-                            <button class="btn btn-primary" onclick="downloadVideo('${videoId}', '${format}', this)">
-                                Baixar ${format.toUpperCase()}
-                            </button>
-                        </div>
+                    `;
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Erro no download');
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-danger">
+                        Erro: ${error.message}
                     </div>
                 `;
-                videoInfo.appendChild(videoDiv);
-            }
-        }
-
-        async function downloadVideo(videoId, format, button) {
-            button.disabled = true;
-            button.textContent = 'Preparando download...';
-            const progressBar = document.getElementById(`progress-${videoId}`);
-
-            try {
-                // Simular progresso (na versão real, isso seria feito com a API)
-                let progress = 0;
-                const interval = setInterval(() => {
-                    progress += 5;
-                    if (progress <= 100) {
-                        progressBar.style.width = `${progress}%`;
-                        progressBar.textContent = `${progress}%`;
-                    }
-                }, 500);
-
-                // Na versão real, aqui faríamos a chamada para a API de download
-                setTimeout(() => {
-                    clearInterval(interval);
-                    button.textContent = 'Download Concluído!';
-                    button.classList.remove('btn-primary');
-                    button.classList.add('btn-success');
-                    
-                    // Aqui você pode adicionar o link real de download quando tiver a API
-                    const downloadUrl = `https://your-api.com/download/${videoId}?format=${format}`;
-                    window.open(downloadUrl, '_blank');
-                }, 5000);
-
-            } catch (error) {
-                console.error('Erro no download:', error);
-                button.textContent = 'Erro no download';
-                button.classList.remove('btn-primary');
-                button.classList.add('btn-danger');
             }
         }
     </script>
