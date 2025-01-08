@@ -45,14 +45,21 @@
             color: #5f73bc;
             text-decoration: underline;
         }
+        .video-item {
+            margin-bottom: 15px;
+            padding: 15px;
+            border: 1px solid #333;
+            border-radius: 5px;
+        }
+        .video-thumbnail {
+            max-width: 200px;
+            border-radius: 5px;
+        }
         .progress {
             background-color: #2d2d2d;
-            height: 20px;
-            margin-top: 10px;
         }
         .progress-bar {
             background-color: #7289da;
-            transition: width 0.5s ease;
         }
     </style>
 </head>
@@ -64,8 +71,8 @@
                     <div class="card-body">
                         <h2 class="text-center mb-4">YouTube Downloader</h2>
                         <div class="mb-3">
-                            <label for="urls" class="form-label">Links dos Vídeos (um por linha)</label>
-                            <textarea class="form-control" id="urls" rows="5" placeholder="Cole os links do YouTube aqui..."></textarea>
+                            <label for="url" class="form-label">Link do Vídeo</label>
+                            <input type="text" class="form-control" id="url" placeholder="Cole o link do YouTube aqui...">
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Formato:</label>
@@ -78,9 +85,9 @@
                                 <label class="form-check-label" for="mp4">MP4 (Vídeo)</label>
                             </div>
                         </div>
-                        <button class="btn btn-primary w-100" onclick="downloadVideos()">Baixar</button>
+                        <button class="btn btn-primary w-100" onclick="downloadVideo()">Baixar</button>
                         
-                        <div id="results" class="mt-4"></div>
+                        <div id="download-status" class="mt-4"></div>
                     </div>
                 </div>
             </div>
@@ -88,121 +95,81 @@
     </div>
 
     <script>
-        const activeDownloads = new Set();
-
-        function formatSpeed(speed) {
-            if (!speed) return '0 MB/s';
-            return `${(speed / 1024 / 1024).toFixed(2)} MB/s`;
-        }
-
-        function formatTime(seconds) {
-            if (!seconds) return '0s';
-            if (seconds < 60) return `${seconds}s`;
-            const minutes = Math.floor(seconds / 60);
-            const remainingSeconds = seconds % 60;
-            return `${minutes}m ${remainingSeconds}s`;
-        }
-
-        async function checkProgress(videoId, resultElement) {
-            while (activeDownloads.has(videoId)) {
-                try {
-                    const response = await fetch(`/progress/${videoId}`);
-                    const progress = await response.json();
-                    
-                    const progressBar = resultElement.querySelector('.progress-bar');
-                    const progressText = resultElement.querySelector('.progress-text');
-                    
-                    if (progress.status === 'downloading') {
-                        progressBar.style.width = `${progress.percent}%`;
-                        progressBar.setAttribute('aria-valuenow', progress.percent);
-                        
-                        const speed = formatSpeed(progress.speed);
-                        const eta = formatTime(progress.eta);
-                        progressText.textContent = `${progress.percent.toFixed(1)}% (${speed} - ETA: ${eta})`;
-                    } else if (progress.status === 'finished') {
-                        progressBar.style.width = '100%';
-                        progressBar.setAttribute('aria-valuenow', 100);
-                        progressText.textContent = 'Download completo!';
-                        activeDownloads.delete(videoId);
-                        break;
-                    }
-                } catch (error) {
-                    console.error('Erro ao verificar progresso:', error);
-                }
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
-
-        async function downloadVideos() {
-            const urlsText = document.getElementById('urls').value;
-            const urls = urlsText.split('\n').filter(url => url.trim() !== '');
+        async function downloadVideo() {
+            const url = document.getElementById('url').value;
             const format = document.querySelector('input[name="format"]:checked').value;
+            const statusDiv = document.getElementById('download-status');
             
-            if (urls.length === 0) {
-                alert('Por favor, insira pelo menos um link do YouTube.');
+            if (!url) {
+                alert('Por favor, insira um link do YouTube');
                 return;
             }
 
-            const resultsDiv = document.getElementById('results');
-            resultsDiv.innerHTML = '<div class="alert alert-info">Iniciando downloads...</div>';
+            // Criar elemento de status
+            statusDiv.innerHTML = `
+                <div class="video-item">
+                    <h5>Baixando vídeo...</h5>
+                    <div class="progress mb-3" style="height: 20px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                             role="progressbar" style="width: 0%;" 
+                             id="progress-bar">0%</div>
+                    </div>
+                    <div id="download-info" class="text-muted"></div>
+                </div>
+            `;
 
             try {
-                const response = await fetch('/download', {
+                const response = await fetch('/api/download', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ urls, format })
+                    body: JSON.stringify({ url, format })
                 });
 
-                const data = await response.json();
-                
-                if (data.error) {
-                    resultsDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
-                    return;
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const downloadUrl = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = downloadUrl;
+                    a.download = `video.${format}`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(downloadUrl);
+                    
+                    statusDiv.innerHTML = `
+                        <div class="alert alert-success">
+                            Download concluído com sucesso!
+                        </div>
+                    `;
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Erro no download');
                 }
-
-                let resultsHtml = '<div class="list-group">';
-                data.results.forEach(result => {
-                    if (result.status === 'success') {
-                        const resultHtml = `
-                            <div class="list-group-item list-group-item-success" data-video-id="${result.video_id}">
-                                <div>${result.title}</div>
-                                <div class="progress">
-                                    <div class="progress-bar" role="progressbar" style="width: 0%" 
-                                         aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
-                                </div>
-                                <div class="progress-text mt-1">Iniciando...</div>
-                                <a href="${result.download_url}" class="download-link mt-2 d-block" download>
-                                    Clique aqui para baixar manualmente
-                                </a>
-                            </div>`;
-                        resultsHtml += resultHtml;
-                        
-                        // Iniciar monitoramento do progresso
-                        setTimeout(() => {
-                            const resultElement = document.querySelector(`[data-video-id="${result.video_id}"]`);
-                            if (resultElement) {
-                                activeDownloads.add(result.video_id);
-                                checkProgress(result.video_id, resultElement);
-                            }
-                        }, 0);
-                        
-                        // Iniciar download automático
-                        window.location.href = result.download_url;
-                    } else {
-                        resultsHtml += `
-                            <div class="list-group-item list-group-item-danger">
-                                Erro ao baixar: ${result.message}
-                            </div>`;
-                    }
-                });
-                resultsHtml += '</div>';
-                
-                resultsDiv.innerHTML = resultsHtml;
             } catch (error) {
-                resultsDiv.innerHTML = `<div class="alert alert-danger">Erro ao processar o download: ${error.message}</div>`;
+                statusDiv.innerHTML = `
+                    <div class="alert alert-danger">
+                        Erro: ${error.message}
+                    </div>
+                `;
             }
+        }
+
+        // Função para formatar o tamanho em bytes
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        // Função para formatar o tempo estimado
+        function formatTime(seconds) {
+            if (!seconds) return 'Calculando...';
+            return new Date(seconds * 1000).toISOString().substr(11, 8);
         }
     </script>
 </body>

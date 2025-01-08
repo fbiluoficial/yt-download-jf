@@ -1,148 +1,109 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 import yt_dlp
 import os
 from pathlib import Path
-import time
+import tempfile
+import logging
 
 app = Flask(__name__)
+CORS(app)
 
-# Definir o diretório de downloads do usuário
-DOWNLOAD_DIR = str(Path.home() / "Downloads")
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Dicionário para armazenar o progresso dos downloads
+# Configurações do yt-dlp
+ydl_opts = {
+    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+    'outtmpl': '%(title)s.%(ext)s',
+    'quiet': True,
+    'no_warnings': True,
+    'progress_hooks': [],
+}
+
 download_progress = {}
 
 def progress_hook(d):
     if d['status'] == 'downloading':
         video_id = d.get('info_dict', {}).get('id', 'unknown')
-        
-        # Calcular progresso
-        if 'total_bytes' in d:
-            percent = (d['downloaded_bytes'] / d['total_bytes']) * 100
-        elif 'total_bytes_estimate' in d:
-            percent = (d['downloaded_bytes'] / d['total_bytes_estimate']) * 100
-        else:
-            percent = 0
+        try:
+            downloaded = d.get('downloaded_bytes', 0)
+            total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
             
-        # Atualizar progresso
-        download_progress[video_id] = {
-            'status': 'downloading',
-            'percent': percent,
-            'speed': d.get('speed', 0),
-            'eta': d.get('eta', 0),
-            'filename': d.get('filename', '')
-        }
-        
-    elif d['status'] == 'finished':
-        video_id = d.get('info_dict', {}).get('id', 'unknown')
-        download_progress[video_id] = {
-            'status': 'finished',
-            'percent': 100
-        }
+            if total > 0:
+                progress = (downloaded / total) * 100
+                speed = d.get('speed', 0)
+                eta = d.get('eta', 0)
+                
+                download_progress[video_id] = {
+                    'progress': progress,
+                    'speed': speed,
+                    'eta': eta,
+                    'status': 'downloading'
+                }
+        except Exception as e:
+            logger.error(f"Error in progress_hook: {str(e)}")
 
 @app.route('/')
-def index():
-    return render_template('index.html')
+def home():
+    return app.send_static_file('index.html')
 
-@app.route('/progress/<video_id>')
-def get_progress(video_id):
-    return jsonify(download_progress.get(video_id, {'status': 'unknown', 'percent': 0}))
-
-@app.route('/download', methods=['POST'])
+@app.route('/api/download', methods=['POST'])
 def download():
     try:
-        data = request.json
-        urls = data.get('urls', [])
-        format_type = data.get('format')
+        data = request.get_json()
+        video_url = data.get('url')
+        format_type = data.get('format', 'mp4')
         
-        results = []
-        for url in urls:
-            try:
-                output_template = os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s')
-                
-                ydl_opts = {
-                    'format': 'bestaudio/best' if format_type == 'mp3' else 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]',
-                    'outtmpl': output_template,
-                    'progress_hooks': [progress_hook],
-                    'quiet': False,
-                    'no_warnings': False,
-                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'en-us,en;q=0.5',
-                        'Sec-Fetch-Mode': 'navigate'
-                    }
-                }
+        if not video_url:
+            return jsonify({'error': 'URL não fornecida'}), 400
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            if format_type == 'mp3':
+                ydl_opts.update({
+                    'format': 'bestaudio/best',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }],
+                    'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+                })
+            else:
+                ydl_opts.update({
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+                    'postprocessors': [],
+                })
+
+            ydl_opts['progress_hooks'] = [progress_hook]
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                video_id = info.get('id', 'unknown')
+                filename = ydl.prepare_filename(info)
                 
                 if format_type == 'mp3':
-                    ydl_opts.update({
-                        'postprocessors': [{
-                            'key': 'FFmpegExtractAudio',
-                            'preferredcodec': 'mp3',
-                            'preferredquality': '192',
-                        }],
-                    })
-                
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    # Primeiro, extrair informações do vídeo
-                    info = ydl.extract_info(url, download=False)
-                    video_title = info.get('title', 'Video')
-                    video_id = info.get('id', 'unknown')
-                    
-                    # Inicializar progresso
-                    download_progress[video_id] = {
-                        'status': 'starting',
-                        'percent': 0
-                    }
-                    
-                    # Depois, fazer o download
-                    ydl.download([url])
-                    
-                    # Determinar o caminho do arquivo baixado
-                    if format_type == 'mp3':
-                        file_path = os.path.join(DOWNLOAD_DIR, f"{video_title}.mp3")
-                    else:
-                        # Para MP4, pegamos a extensão do formato escolhido
-                        ext = 'mp4'
-                        file_path = os.path.join(DOWNLOAD_DIR, f"{video_title}.{ext}")
-                    
-                    # Verificar se o arquivo existe
-                    if os.path.exists(file_path):
-                        download_url = f"/get_file/{video_title}.{format_type}"
-                        results.append({
-                            'title': video_title,
-                            'status': 'success',
-                            'path': file_path,
-                            'download_url': download_url,
-                            'video_id': video_id
-                        })
-                    else:
-                        raise Exception("Arquivo não foi criado corretamente")
-                    
-            except Exception as e:
-                print(f"Erro no download: {str(e)}")
-                results.append({
-                    'url': url,
-                    'status': 'error',
-                    'message': str(e)
-                })
-        
-        return jsonify({'results': results})
+                    filename = filename.rsplit('.', 1)[0] + '.mp3'
+
+                if os.path.exists(filename):
+                    download_progress[video_id] = {'status': 'completed'}
+                    return send_file(
+                        filename,
+                        as_attachment=True,
+                        download_name=os.path.basename(filename)
+                    )
+                else:
+                    return jsonify({'error': 'Arquivo não encontrado'}), 404
+
     except Exception as e:
-        print(f"Erro geral: {str(e)}")
+        logger.error(f"Error in download: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/get_file/<filename>')
-def get_file(filename):
-    try:
-        return send_file(
-            os.path.join(DOWNLOAD_DIR, filename),
-            as_attachment=True,
-            download_name=filename
-        )
-    except Exception as e:
-        return str(e), 404
+@app.route('/api/progress/<video_id>')
+def get_progress(video_id):
+    return jsonify(download_progress.get(video_id, {'status': 'unknown'}))
 
 if __name__ == '__main__':
     app.run(debug=True)
