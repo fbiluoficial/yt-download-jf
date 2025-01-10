@@ -76,4 +76,11 @@ def download():
 
 # Handler for Vercel serverless function
 def handler(request):
-    return app(request)
+    if request.method == "POST":
+        return download()
+    return app
+
+app = create_app()
+
+if __name__ == '__main__':
+    app.run(debug=True)
